@@ -99,7 +99,8 @@ do
   vim.g.maplocalleader = ' '
 
   -- Set to true if you have a Nerd Font installed and selected in the terminal
-  vim.g.have_nerd_font = false
+  vim.g.have_nerd_font = true
+  vim.g.html_syntax_folding = true
 
   -- [[ Setting options ]]
   --  See `:help vim.o`
@@ -107,6 +108,7 @@ do
   --  For more options, you can see `:help option-list`
 
   -- Make line numbers default
+  vim.o.colorcolumn = '121'
   vim.o.number = true
   -- You can also add relative line numbers, to help with jumping.
   --  Experiment for yourself to see if you like it!
@@ -175,6 +177,100 @@ do
   -- [[ Basic Keymaps ]]
   --  See `:help vim.keymap.set()`
 
+  local function close_current_buffer(force)
+    if force then
+      return function() vim.api.nvim_exec2('bp|sp|bn|bd!', {}) end
+    else
+      return function()
+        xpcall(function() vim.api.nvim_exec2('bp|sp|bn|bd', {}) end, function(result)
+          -- bd failed, close window and restore buffer
+          local _, start = string.find(result, 'Vim(bdelete):', nil, true)
+          if not start then
+            vim.notify('Unknown error occured', vim.log.levels.ERROR)
+          else
+            vim.api.nvim_exec2('close|bn', {})
+            vim.notify(string.sub(result, start + 1), vim.log.levels.ERROR)
+          end
+        end)
+      end
+    end
+  end
+
+  local function close_all_buffers(force)
+    if force then
+      return function() vim.api.nvim_exec2('%bd!|e#', {}) end
+    else
+      return function() vim.api.nvim_exec2('%bd|e#', {}) end
+    end
+  end
+
+  local function keybinds_window(keybinds, title)
+    local kb_ns = vim.api.nvim_create_namespace ''
+    local hl = vim.api.nvim_get_hl(0, { name = 'PMenuMatch' })
+    vim.api.nvim_set_hl(kb_ns, 'KbHighlight', { fg = hl.fg })
+
+    local max_desc = 0
+    local max_keybind = 0
+    local lines = {}
+    for _, item in ipairs(keybinds) do
+      if item.desc:len() > max_desc then max_desc = item.desc:len() end
+      if item.keybind:len() > max_keybind then max_keybind = item.keybind:len() end
+    end
+    for n, item in ipairs(keybinds) do
+      lines[n] = ' ' .. item.desc .. string.rep(' ', max_desc - item.desc:len() + 1) .. item.keybind
+    end
+
+    return function()
+      local window_w = max_desc + max_keybind + 9
+      local window_h = #lines
+      local max_window_h = math.floor((vim.opt.lines:get() - vim.opt.cmdheight:get()) * 0.8)
+      -- TODO: on window resize?
+      if window_h > max_window_h then window_h = max_window_h end
+      local center_x = (vim.opt.columns:get() - window_w) / 2
+      local center_y = ((vim.opt.lines:get() - window_h) / 2) - vim.opt.cmdheight:get()
+
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, true, lines)
+
+      for n, item in ipairs(keybinds) do
+        local line = n - 1
+        local col = max_desc + 2
+        local len = item.keybind:len()
+        vim.api.nvim_buf_set_extmark(buf, kb_ns, line, col, {
+          end_row = line,
+          end_col = col + len,
+          hl_group = 'KbHighlight',
+        })
+      end
+
+      local win = vim.api.nvim_open_win(buf, true, {
+        relative = 'editor',
+        width = window_w,
+        height = window_h,
+        col = center_x,
+        row = center_y,
+        border = 'rounded',
+        title = title,
+      })
+      vim.api.nvim_win_set_hl_ns(win, kb_ns)
+
+      vim.keymap.set('n', '<Esc>', function() vim.api.nvim_buf_delete(buf, { force = true }) end, { buffer = buf })
+      vim.keymap.set('n', '<CR>', function()
+        local cursor = vim.api.nvim_win_get_cursor(win)
+        local cmd = vim.api.nvim_replace_termcodes(keybinds[cursor[1]].keybind, true, true, true)
+        vim.api.nvim_buf_delete(buf, { force = true })
+        vim.cmd.normal(cmd)
+      end, { buffer = buf })
+    end
+  end
+
+  -- vim.print(vim.api.nvim_get_keymap("n"))
+
+  vim.keymap.set('n', '<leader>x', close_current_buffer(false), { silent = true, desc = 'Close current buffer' })
+  vim.keymap.set('n', '<leader><S-x>', close_current_buffer(true), { silent = true, desc = 'Close current buffer!' })
+  vim.keymap.set('n', '<leader><C-x>', close_all_buffers(false), { silent = true, desc = 'Close all buffers' })
+  vim.keymap.set('n', '<leader><C-S-x>', close_all_buffers(true), { silent = true, desc = 'Close current buffers!' })
+  vim.keymap.set('n', '<leader>tt', ":let $CD_DIR=expand('%:p:h')<CR>:terminal<CR>:startinsert!<CR>", { silent = true, desc = '[T]oggle [T]erminal' })
   -- Clear highlights on search when pressing <Esc> in normal mode
   --  See `:help hlsearch`
   vim.keymap.set('n', '<Esc>', '<cmd>nohlsearch<CR>')
@@ -212,12 +308,15 @@ do
   -- NOTE: This won't work in all terminal emulators/tmux/etc. Try your own mapping
   -- or just use <C-\><C-n> to exit terminal mode
   vim.keymap.set('t', '<Esc><Esc>', '<C-\\><C-n>', { desc = 'Exit terminal mode' })
+  vim.keymap.set('t', '<C-x>', '<C-\\><C-n>:bp|sp|bn|bd!<CR>', { silent = true, desc = 'Exit terminal mode' })
+
+  vim.keymap.set('n', '<S-Tab>', '<C-o>')
 
   -- TIP: Disable arrow keys in normal mode
-  -- vim.keymap.set('n', '<left>', '<cmd>echo "Use h to move!!"<CR>')
-  -- vim.keymap.set('n', '<right>', '<cmd>echo "Use l to move!!"<CR>')
-  -- vim.keymap.set('n', '<up>', '<cmd>echo "Use k to move!!"<CR>')
-  -- vim.keymap.set('n', '<down>', '<cmd>echo "Use j to move!!"<CR>')
+  vim.keymap.set('n', '<left>', '<cmd>echo "Use h to move!!"<CR>')
+  vim.keymap.set('n', '<right>', '<cmd>echo "Use l to move!!"<CR>')
+  vim.keymap.set('n', '<up>', '<cmd>echo "Use k to move!!"<CR>')
+  vim.keymap.set('n', '<down>', '<cmd>echo "Use j to move!!"<CR>')
 
   -- Keybinds to make split navigation easier.
   --  Use CTRL+<hjkl> to switch between windows
@@ -234,6 +333,12 @@ do
   -- vim.keymap.set("n", "<C-S-j>", "<C-w>J", { desc = "Move window to the lower" })
   -- vim.keymap.set("n", "<C-S-k>", "<C-w>K", { desc = "Move window to the upper" })
 
+  vim.keymap.set('n', '<C-w>|', ':vert res 122<CR>', { silent = true, desc = 'Resize window to ideal width' })
+  vim.keymap.set('n', '<C-w>b', ':vs<CR><C-w><C-h>:vert res 122<CR>', { silent = true, desc = 'Resize window to ideal width' })
+
+  vim.keymap.set('n', '<leader>bn', '', { desc = 'List keybinds in normal mode' })
+  vim.keymap.set('n', '<leader>bt', ':Telescope keymaps<CR>', { desc = 'Search keybinds in Telescope' })
+
   -- [[ Basic Autocommands ]]
   --  See `:help lua-guide-autocommands`
 
@@ -245,6 +350,14 @@ do
     group = vim.api.nvim_create_augroup('kickstart-highlight-yank', { clear = true }),
     callback = function() vim.hl.on_yank() end,
   })
+
+  vim.filetype.add {
+    extension = {
+      html = 'html',
+      hlsl = 'hlsl',
+      msl = 'msl',
+    },
+  }
 end
 
 -- ============================================================
@@ -364,7 +477,8 @@ do
 
   -- Useful plugin to show you pending keybinds.
   vim.pack.add { gh 'folke/which-key.nvim' }
-  require('which-key').setup {
+  local wk = require 'which-key'
+  wk.setup {
     -- Delay between pressing a key and opening which-key (milliseconds)
     delay = 0,
     icons = { mappings = vim.g.have_nerd_font },
@@ -375,6 +489,19 @@ do
       { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } }, -- Enable gitsigns recommended keymaps first
       { 'gr', group = 'LSP Actions', mode = { 'n' } },
     },
+  }
+  wk.add {
+    { '<leader>0', hidden = true },
+    { '<leader>1', hidden = true },
+    { '<leader>2', hidden = true },
+    { '<leader>3', hidden = true },
+    { '<leader>4', hidden = true },
+    { '<leader>5', hidden = true },
+    { '<leader>6', hidden = true },
+    { '<leader>7', hidden = true },
+    { '<leader>8', hidden = true },
+    { '<leader>9', hidden = true },
+    { '<leader>0', hidden = true },
   }
 
   -- [[ Colorscheme ]]
@@ -534,7 +661,7 @@ do
       -- Jump to the definition of the word under your cursor.
       -- This is where a variable was first declared, or where a function is defined, etc.
       -- To jump back, press <C-t>.
-      vim.keymap.set('n', 'grd', builtin.lsp_definitions, { buffer = buf, desc = '[G]oto [D]efinition' })
+      vim.keymap.set('n', 'gd', builtin.lsp_definitions, { buffer = buf, desc = '[G]oto [D]efinition' })
 
       -- Fuzzy find all the symbols in your current document.
       -- Symbols are things like variables, functions, types, etc.
@@ -547,7 +674,7 @@ do
       -- Jump to the type of the word under your cursor.
       -- Useful when you're not sure what type a variable is and you want to see
       -- the definition of its *type*, not where it was *defined*.
-      vim.keymap.set('n', 'grt', builtin.lsp_type_definitions, { buffer = buf, desc = '[G]oto [T]ype Definition' })
+      vim.keymap.set('n', 'gD', builtin.lsp_type_definitions, { buffer = buf, desc = '[G]oto [T]ype Definition' })
     end,
   })
 
@@ -686,9 +813,15 @@ do
   --  See `:help lsp-config` for information about keys and how to configure
   ---@type table<string, vim.lsp.Config>
   local servers = {
-    -- clangd = {},
-    -- gopls = {},
-    -- pyright = {},
+    clangd = {},
+    gopls = {},
+    intelephense = {},
+    pyright = {},
+    tailwindcss = {},
+    vtsls = {},
+    vue_ls = {},
+    astro = {},
+
     -- rust_analyzer = {},
     --
     -- Some languages (like typescript) have entire language plugins that can be useful:
@@ -728,9 +861,31 @@ do
       ---@type lspconfig.settings.lua_ls
       settings = {
         Lua = {
+          completion = {
+            callSnippet = 'Replace',
+          },
           format = { enable = false }, -- Disable formatting (formatting is done by stylua)
         },
       },
+    },
+
+    zls = {
+      cmd = { '/opt/zls/zls' },
+      filetypes = { 'zig', 'zir' },
+      settings = {
+        zls = {
+          zig_exe_path = '/opt/homebrew/bin/zig',
+          enable_inlay_hints = true,
+          enable_snippets = true,
+          warn_style = true,
+        },
+      },
+    },
+
+    wgsl_analyzer = {
+      cmd = { 'wgsl-analyzer' },
+      filetypes = { 'wgsl' },
+      settings = {},
     },
   }
 
@@ -776,8 +931,16 @@ do
     format_on_save = function(bufnr)
       -- You can specify filetypes to autoformat on save here:
       local enabled_filetypes = {
-        -- lua = true,
-        -- python = true,
+        astro = true,
+        c = true,
+        cpp = true,
+        css = true,
+        js = true,
+        mjs = true,
+        lua = true,
+        python = true,
+        ts = true,
+        zig = true,
       }
       if enabled_filetypes[vim.bo[bufnr].filetype] then
         return { timeout_ms = 500 }
@@ -960,12 +1123,12 @@ do
   --  Here are some example plugins that I've included in the Kickstart repository.
   --  Uncomment any of the lines below to enable them (you will need to restart nvim).
   --
-  -- require 'kickstart.plugins.debug'
-  -- require 'kickstart.plugins.indent_line'
-  -- require 'kickstart.plugins.lint'
-  -- require 'kickstart.plugins.autopairs'
-  -- require 'kickstart.plugins.neo-tree'
-  -- require 'kickstart.plugins.gitsigns' -- adds gitsigns recommended keymaps
+  require 'kickstart.plugins.debug'
+  require 'kickstart.plugins.indent_line'
+  require 'kickstart.plugins.lint'
+  require 'kickstart.plugins.autopairs'
+  require 'kickstart.plugins.neo-tree'
+  require 'kickstart.plugins.gitsigns' -- adds gitsigns recommended keymaps
 
   -- NOTE: You can add your own plugins, configuration, etc from `lua/custom/plugins/*.lua`
   --
